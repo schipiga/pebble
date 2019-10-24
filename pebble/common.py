@@ -36,6 +36,11 @@ class ProcessExpired(OSError):
 
 
 class PebbleFuture(Future):
+
+    def __init__(self, *args, **kwgs):
+        super(PebbleFuture, self).__init__(*args, **kwgs)
+        self.task = lambda: None  # placeholder for `weakref.ref` object
+
     # Same as base class, removed logline
     def set_running_or_notify_cancel(self):
         """Mark the future as running or process any cancel notifications.
@@ -121,6 +126,14 @@ class RemoteException(object):
         return rebuild_exception, (self.exception, self.traceback)
 
 
+class PebbleThread(Thread):
+    """Thread wrapper with flag to shutdown worker."""
+
+    def __init__(self, *args, **kwgs):
+        super(PebbleThread, self).__init__(*args, **kwgs)
+        self.is_shutdown = False
+
+
 def rebuild_exception(exception, traceback):
     exception.__cause__ = RemoteTraceback(traceback)
 
@@ -128,7 +141,7 @@ def rebuild_exception(exception, traceback):
 
 
 def launch_thread(name, function, *args, **kwargs):
-    thread = Thread(target=function, name=name, args=args, kwargs=kwargs)
+    thread = PebbleThread(target=function, name=name, args=args, kwargs=kwargs)
     thread.daemon = True
     thread.start()
 
