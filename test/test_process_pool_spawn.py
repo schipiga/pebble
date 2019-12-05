@@ -206,11 +206,12 @@ class TestProcessPool(unittest.TestCase):
 
     def test_process_pool_broken_initializer(self):
         """Process Pool Spawn broken initializer is notified."""
+        py_version = platform.python_version()
         with self.assertRaises(RuntimeError):
             with ProcessPool(initializer=broken_initializer) as pool:
                 pool.active
-                if platform.python_version().startswith('3.4'):
-                    # seems v3.4 affected by https://bugs.python.org/issue32057, because `time.sleep` don't wait
+                if py_version.startswith('3.4') or py_version.startswith('2.7'):
+                    # seems v2.7 & v3.4 affected by https://bugs.python.org/issue32057, because `time.sleep` doesn't wait
                     os.system('sleep 2')
                 else:
                     time.sleep(2)
