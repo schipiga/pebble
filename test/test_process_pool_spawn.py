@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import signal
+import platform
 import unittest
 import threading
 import multiprocessing
@@ -208,7 +209,11 @@ class TestProcessPool(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             with ProcessPool(initializer=broken_initializer) as pool:
                 pool.active
-                time.sleep(2)
+                if platform.python_version().startswith('3.4'):
+                    # seems v3.4 affected by https://bugs.python.org/issue32057, because `time.sleep` don't wait
+                    os.system('sleep 2')
+                else:
+                    time.sleep(2)
                 pool.schedule(function)
 
     def test_process_pool_running(self):
