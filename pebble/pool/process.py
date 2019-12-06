@@ -41,6 +41,32 @@ from pebble.common import ProcessExpired, ProcessFuture
 from pebble.common import process_execute, launch_thread, send_result
 
 
+from functools import wraps
+
+
+def waitpid(func):
+    cache = {}
+
+    @wraps(func)
+    def wrapper(pid, options):
+        try:
+            wpid, status = func(pid, options)
+            if wpid > 0:
+                cache[wpid] = status
+        except OSError as e:
+            if pid in cache:
+                return pid, cache[pid]
+            else:
+                raise e
+        else:
+            return wpid, status
+
+    return wrapper
+
+
+os.waitpid = waitpid(os.waitpid)
+
+
 class ProcessPool(BasePool):
     """Allows to schedule jobs within a Pool of Processes.
 
@@ -192,7 +218,7 @@ class PoolManager:
 
     def init_signals(self):
         if hasattr(signal, 'SIGCHLD'):
-            signal.signal(signal.SIGCHLD, self._handle_chld)
+            signal.signal(signal.SIGCHLD, handle_chld)
 
     def start(self):
         self.init_signals()
@@ -259,17 +285,25 @@ class PoolManager:
         else:
             raise BrokenProcessPool("All workers expired")
 
-    def _handle_chld(self, signum, frame):
-        self._reap_workers()
 
-    def _reap_workers(self):
-        """Avoid zombies with next approach:
-        http://www.microhowto.info/howto/reap_zombie_processes_using_a_sigchld_handler.html
-        Python part is inspired from:
-        https://github.com/benoitc/gunicorn/blob/20.0.4/gunicorn/arbiter.py#L507
-        """
-        for w in list(self.worker_manager.workers.values()):
-            w._popen and w._popen.poll()  # uses `os.waitpid` internal
+def handle_chld(signum, frame):
+    reap_workers()
+
+
+def reap_workers():
+    """Avoid zombies with next approach:
+    http://www.microhowto.info/howto/reap_zombie_processes_using_a_sigchld_handler.html
+    Python part is inspired from:
+    https://github.com/benoitc/gunicorn/blob/20.0.4/gunicorn/arbiter.py#L507
+    """
+    try:
+        while True:
+            wpid, status = os.waitpid(-1, os.WNOHANG)
+            if not wpid:
+                break
+    except OSError as e:
+        if e.errno != errno.ECHILD:
+            raise e
 
 
 class TaskManager:
@@ -413,19 +447,6 @@ def _exit(exit_code):
 def worker_process(params, channel):
     """The worker process routines."""
 
-    def _handle_chld(signum, frame):
-        """Prevents zombies in workers."""
-        try:
-            while True:
-                wpid, status = os.waitpid(-1, os.WNOHANG)
-                if not wpid:
-                    break
-        except OSError as e:
-            if e.errno != errno.ECHILD:
-                raise e
-
-    if hasattr(signal, 'SIGCHLD'):
-        signal.signal(signal.SIGCHLD, _handle_chld)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, lambda signum, frame: _exit(0))
 
