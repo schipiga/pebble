@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with Pebble.  If not, see <http://www.gnu.org/licenses/>.
 
+import errno
 import os
 import signal
 import time
@@ -391,17 +392,36 @@ class WorkerManager:
             return  # worker already expired
 
 
+def _proc_children():
+    for child in psutil.Process(os.getpid()).children(recursive=True):
+        yield child
+
+
 def _exit(exit_code):
     """Kill all child processes before exit.
     Helps to avoid slept children if worker exited.
     """
-    for child in psutil.Process(os.getpid()).children(recursive=True):
+    for child in _proc_children():
         child.kill()
     os._exit(exit_code)
 
 
 def worker_process(params, channel):
     """The worker process routines."""
+
+    def _handle_chld(signum, frame):
+        """Prevents zombies in workers."""
+        try:
+            while True:
+                wpid, status = os.waitpid(-1, os.WNOHANG)
+                if not wpid:
+                    break
+        except OSError as e:
+            if e.errno != errno.ECHILD:
+                raise e
+
+    if hasattr(signal, 'SIGCHLD'):
+        signal.signal(signal.SIGCHLD, _handle_chld)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     signal.signal(signal.SIGTERM, lambda signum, frame: _exit(0))
 
@@ -409,12 +429,21 @@ def worker_process(params, channel):
         if not run_initializer(params.initializer, params.initargs):
             _exit(1)
 
+    # store children pids which may start together with initializer
+    init_pids = [child.pid for child in _proc_children()]
+
     try:
         for task in worker_get_next_task(channel, params.max_tasks):
             payload = task.payload
             result = process_execute(
                 payload.function, *payload.args, **payload.kwargs)
             send_result(channel, Result(task.id, result))
+
+            for child in _proc_children():
+                # kill child process if it wasn't finished together with task
+                if child.pid not in init_pids:
+                    child.kill()
+
     except (EnvironmentError, OSError, RuntimeError) as error:
         _exit(error.errno if error.errno else 1)
     except EOFError:
